@@ -2,7 +2,7 @@ pub mod stage;
 pub mod stages;
 
 use self::stage::{Stage, StageInput, UnwindInput};
-use crate::{kv::traits::*, stagedsync::stage::ExecOutput};
+use crate::{kv::traits::*, models::BlockNumber, stagedsync::stage::*};
 use std::time::{Duration, Instant};
 use tracing::*;
 
@@ -21,6 +21,7 @@ use tracing::*;
 pub struct StagedSync<'db, DB: MutableKV> {
     stages: Vec<Box<dyn Stage<'db, DB::MutableTx<'db>>>>,
     min_progress_to_commit_after_stage: u64,
+    pruning_interval: u64,
 }
 
 impl<'db, DB: MutableKV> Default for StagedSync<'db, DB> {
@@ -34,6 +35,7 @@ impl<'db, DB: MutableKV> StagedSync<'db, DB> {
         Self {
             stages: Vec::new(),
             min_progress_to_commit_after_stage: 0,
+            pruning_interval: 0,
         }
     }
 
@@ -42,6 +44,11 @@ impl<'db, DB: MutableKV> StagedSync<'db, DB> {
         S: Stage<'db, DB::MutableTx<'db>> + 'static,
     {
         self.stages.push(Box::new(stage))
+    }
+
+    pub fn set_pruning_interval(&mut self, v: u64) -> &mut Self {
+        self.pruning_interval = v;
+        self
     }
 
     pub fn set_min_progress_to_commit_after_stage(&mut self, v: u64) -> &mut Self {
@@ -121,6 +128,8 @@ impl<'db, DB: MutableKV> StagedSync<'db, DB> {
 
                 let mut previous_stage = None;
                 let mut timings = vec![];
+
+                let mut minimum_progress = None;
 
                 // Execute each stage in direct order.
                 for (stage_index, stage) in self.stages.iter_mut().enumerate() {
@@ -224,6 +233,12 @@ impl<'db, DB: MutableKV> StagedSync<'db, DB> {
                             } => {
                                 stage_id.save_progress(&tx, stage_progress).await?;
 
+                                if let Some(m) = &mut minimum_progress {
+                                    *m = std::cmp::min(*m, stage_progress);
+                                } else {
+                                    minimum_progress = Some(stage_progress);
+                                }
+
                                 // Check if we should commit now.
                                 if stage_progress
                                     .saturating_sub(start_progress.map(|v| v.0).unwrap_or(0))
@@ -257,7 +272,6 @@ impl<'db, DB: MutableKV> StagedSync<'db, DB> {
 
                     previous_stage = Some((stage_id, done_progress))
                 }
-                tx.commit().await?;
 
                 let t = timings
                     .into_iter()
@@ -265,6 +279,73 @@ impl<'db, DB: MutableKV> StagedSync<'db, DB> {
                         format!("{} {}={}", acc, stage_id, format_duration(time, true))
                     });
                 info!("Staged sync complete.{}", t);
+
+                if let Some(minimum_progress) = minimum_progress {
+                    if self.pruning_interval > 0 {
+                        if let Some(prune_to) =
+                            minimum_progress.0.checked_sub(self.pruning_interval)
+                        {
+                            let prune_to = BlockNumber(prune_to);
+
+                            // Prune all stages
+                            for (stage_index, stage) in self.stages.iter_mut().enumerate() {
+                                let stage_id = stage.id();
+
+                                let res: anyhow::Result<()> = async {
+                                    let prune_progress = stage_id.get_prune_progress(&tx).await?;
+
+                                    if let Some(prune_progress) = prune_progress {
+                                        if prune_progress >= prune_to {
+                                            debug!(
+                                                prune_to = *prune_to,
+                                                progress = *prune_progress,
+                                                "Prune point too far to prune"
+                                            );
+
+                                            return Ok(());
+                                        }
+                                    }
+
+                                    info!(
+                                        "PRUNING from {}",
+                                        prune_progress
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_else(|| "genesis".to_string())
+                                    );
+
+                                    stage
+                                        .prune(
+                                            &mut tx,
+                                            PruningInput {
+                                                prune_progress,
+                                                prune_to,
+                                            },
+                                        )
+                                        .await?;
+
+                                    stage_id.save_prune_progress(&tx, prune_to).await?;
+
+                                    info!("PRUNED to {}", prune_to);
+
+                                    Ok(())
+                                }
+                                .instrument(span!(
+                                    Level::INFO,
+                                    "",
+                                    " Pruning {}/{} {} ",
+                                    stage_index + 1,
+                                    num_stages,
+                                    AsRef::<str>::as_ref(&stage_id)
+                                ))
+                                .await;
+
+                                res?;
+                            }
+                        }
+                    }
+                }
+
+                tx.commit().await?;
             }
         }
     }

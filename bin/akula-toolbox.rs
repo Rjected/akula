@@ -14,6 +14,8 @@ use bytes::Bytes;
 use clap::Parser;
 use itertools::Itertools;
 use std::{borrow::Cow, path::PathBuf, sync::Arc};
+use tokio::pin;
+use tokio_stream::StreamExt;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -80,6 +82,10 @@ pub enum OptCommand {
 
     ReadAccount {
         address: Address,
+    },
+
+    ReadAccountChanges {
+        block: BlockNumber,
     },
 }
 
@@ -399,6 +405,28 @@ async fn read_account(data_dir: AkulaDataDir, address: Address) -> anyhow::Resul
     Ok(())
 }
 
+async fn read_account_changes(data_dir: AkulaDataDir, block: BlockNumber) -> anyhow::Result<()> {
+    let env = akula::kv::mdbx::Environment::<mdbx::NoWriteMap>::open_ro(
+        mdbx::Environment::new(),
+        &data_dir.chain_data_dir(),
+        CHAINDATA_TABLES.clone(),
+    )?;
+
+    let tx = env.begin().await?;
+
+    let mut cur = tx.cursor_dup_sort(tables::AccountChangeSet).await?;
+
+    let walker = walk_dup::<_, tables::AccountChangeSet>(&mut cur, block);
+
+    pin!(walker);
+
+    while let Some(tables::AccountChange { address, account }) = walker.try_next().await? {
+        println!("{:?}: {:?}", address, account);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt: Opt = Opt::parse();
@@ -429,6 +457,9 @@ async fn main() -> anyhow::Result<()> {
         OptCommand::HeaderDownload { opts } => header_download(opt.data_dir, opts).await?,
         OptCommand::ReadBlock { block_number } => read_block(opt.data_dir, block_number).await?,
         OptCommand::ReadAccount { address } => read_account(opt.data_dir, address).await?,
+        OptCommand::ReadAccountChanges { block } => {
+            read_account_changes(opt.data_dir, block).await?
+        }
     }
 
     Ok(())

@@ -77,6 +77,10 @@ pub enum OptCommand {
     ReadBlock {
         block_number: BlockNumber,
     },
+
+    ReadAccount {
+        address: Address,
+    },
 }
 
 #[derive(Parser)]
@@ -379,6 +383,22 @@ async fn read_block(data_dir: AkulaDataDir, block_num: BlockNumber) -> anyhow::R
     Ok(())
 }
 
+async fn read_account(data_dir: AkulaDataDir, address: Address) -> anyhow::Result<()> {
+    let env = akula::kv::mdbx::Environment::<mdbx::NoWriteMap>::open_ro(
+        mdbx::Environment::new(),
+        &data_dir.chain_data_dir(),
+        CHAINDATA_TABLES.clone(),
+    )?;
+
+    let tx = env.begin().await?;
+
+    let account = akula::accessors::state::account::read(&tx, address, None).await?;
+
+    println!("{:?}", account);
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt: Opt = Opt::parse();
@@ -408,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
         OptCommand::CheckEqual { db1, db2, table } => check_table_eq(db1, db2, table).await?,
         OptCommand::HeaderDownload { opts } => header_download(opt.data_dir, opts).await?,
         OptCommand::ReadBlock { block_number } => read_block(opt.data_dir, block_number).await?,
+        OptCommand::ReadAccount { address } => read_account(opt.data_dir, address).await?,
     }
 
     Ok(())

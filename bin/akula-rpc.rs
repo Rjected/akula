@@ -431,14 +431,13 @@ where
             .unwrap_or_default()
             .transactions;
 
-        let mut index = 0;
-        while index < msgs_with_sender.len() {
-            if msgs_with_sender[index].hash() == tx_hash {
-                break;
-            }
-            index += 1;
-        }
-        let msg = &msgs_with_sender[index];
+        let msgs: Vec<(usize, &MessageWithSender)> = msgs_with_sender
+            .iter()
+            .filter(|msg| msg.hash() == tx_hash)
+            .enumerate()
+            .map(|(index, msg)| (index, msg))
+            .collect();
+        let (index, msg) = msgs[0];
 
         let header = header::read(tx, block_hash, block_number)
             .await?
@@ -467,21 +466,21 @@ where
 
         let receipt = processor.execute_block_no_post_validation().await?[index].clone();
 
-        let mut logs: Vec<TxLog> = Vec::new();
-        let mut i = 0;
-        while i < receipt.logs.len() {
-            logs.push(TxLog {
+        let logs: Vec<TxLog> = receipt
+            .logs
+            .into_iter()
+            .enumerate()
+            .map(|(i, log)| TxLog {
                 log_index: Some(U64::from(i)),
                 transaction_index: Some(U64::from(index)),
                 transaction_hash: Some(tx_hash),
                 block_hash: Some(block_hash),
                 block_number: Some(U64::from(block_number.0)),
-                address: receipt.logs[i].address,
-                data: receipt.logs[i].data.clone(),
-                topics: receipt.logs[i].topics.clone(),
-            });
-            i += 1;
-        }
+                address: log.address,
+                data: log.data,
+                topics: log.topics,
+            })
+            .collect();
 
         let to = match msg.action() {
             TransactionAction::Call(to) => Some(to),

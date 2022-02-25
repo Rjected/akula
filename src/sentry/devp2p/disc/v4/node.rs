@@ -439,7 +439,7 @@ impl Node {
                                 let check_hash = H256::from_slice(&buf[0..32]);
                                 if check_hash != hash {
                                     bail!(
-                                        "Hash check failed: computed {}, prefix {}",
+                                        "Hash check failed: computed {:?}, prefix {:?}",
                                         hash,
                                         check_hash
                                     );

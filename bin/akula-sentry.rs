@@ -10,8 +10,7 @@ use ethereum_interfaces::sentry::sentry_server::SentryServer;
 use maplit::btreemap;
 use secp256k1::{PublicKey, SecretKey, SECP256K1};
 use std::{
-    collections::HashMap, fmt::Debug, num::NonZeroUsize, path::PathBuf, str::FromStr, sync::Arc,
-    time::Duration,
+    collections::HashMap, fmt::Debug, num::NonZeroUsize, path::PathBuf, str::FromStr, sync::{Arc, atomic::Ordering}, time::Duration,
 };
 use task_group::TaskGroup;
 use tokio::time::sleep;
@@ -198,6 +197,8 @@ async fn main() -> anyhow::Result<()> {
         .with(filter)
         .init();
 
+    trace!("Sentry started with tracing enabled");
+
     let secret_key;
     if let Some(data) = opts.node_key {
         secret_key = SecretKey::from_slice(&hex::decode(data)?)?;
@@ -288,18 +289,28 @@ async fn main() -> anyhow::Result<()> {
 
     info!("RLPx node listening at {}", listen_addr);
 
-    let sentry_addr = opts.sentry_addr.parse()?;
-    tasks.spawn(async move {
-        let svc = SentryServer::new(SentryService::new(capability_server));
+    // Let's just quit if we don't discover any new peers, because we want to discover new peers!
+    // NOTE: I know why it's default false. We need to set the status before we're allowed to
+    // discover peers, since the status is required for a successful handshake.
+    // TODO: Get a valid Status message for the handshake
+    if capability_server.no_new_peers_handle().load(Ordering::SeqCst) {
+        panic!("Sentry started without discovering peers!");
+        // just quit, return
+    }
 
-        info!("Sentry gRPC server starting on {}", sentry_addr);
+    // Let's not start a grpc server because we don't need it
+    // let sentry_addr = opts.sentry_addr.parse()?;
+    // tasks.spawn(async move {
+    //     let svc = SentryServer::new(SentryService::new(capability_server));
 
-        Server::builder()
-            .add_service(svc)
-            .serve(sentry_addr)
-            .await
-            .unwrap();
-    });
+    //     info!("Sentry gRPC server starting on {}", sentry_addr);
+
+    //     Server::builder()
+    //         .add_service(svc)
+    //         .serve(sentry_addr)
+    //         .await
+    //         .unwrap();
+    // });
 
     loop {
         info!(
@@ -312,3 +323,4 @@ async fn main() -> anyhow::Result<()> {
         sleep(Duration::from_secs(5)).await;
     }
 }
+

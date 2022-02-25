@@ -647,6 +647,7 @@ impl<C: CapabilityServer> Swarm<C> {
                 )
             });
         }
+        info!("Done setting up incoming RLPx handler");
 
         let server = Arc::new(Self {
             tasks: tasks.clone(),
@@ -659,6 +660,7 @@ impl<C: CapabilityServer> Swarm<C> {
             client_version,
             port,
         });
+        info!("Done setting up RLPx server");
 
         if let Some(options) = listen_options {
             tasks.spawn_with_name("dialer", {
@@ -675,6 +677,7 @@ impl<C: CapabilityServer> Swarm<C> {
                             let no_new_peers = options.no_new_peers.clone();
                             async move {
                                 loop {
+                                    trace!("Are we supposed to discover peers? no_new_peers: {:?}", options.no_new_peers.load(Ordering::SeqCst));
                                     if !no_new_peers.load(Ordering::SeqCst) {
                                         trace!("Waiting for next peer from discovery");
                                         let next_peer = discovery_tasks.lock().await.next().await;

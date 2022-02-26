@@ -35,7 +35,7 @@ pub const BOOTNODES: &[&str] = &[
 #[derive(Educe, Parser)]
 #[clap(
     name = "ethereum-sentry",
-    about = "Service that listens to Ethereum's P2P network, serves information to other nodes, and provides gRPC interface to clients to interact with the network."
+    about = "Service that listens to Ethereum's P2P network and serves information to other nodes."
 )]
 #[educe(Debug)]
 pub struct Opts {
@@ -58,6 +58,12 @@ pub struct Opts {
     pub discv4_cache: usize,
     #[clap(long, default_value = "1")]
     pub discv4_concurrent_lookups: usize,
+    /// Peers that we will relay to
+    #[clap(long)]
+    pub relay_peers: Vec<NR>,
+    /// Peers whose responses will be trusted to relay to other peers
+    #[clap(long)]
+    pub trusted_peers: Vec<NR>,
     #[clap(long)]
     pub static_peers: Vec<NR>,
     #[clap(long, default_value = "5000")]

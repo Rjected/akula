@@ -5,7 +5,7 @@ use arrayvec::ArrayString;
 use enum_primitive_derive::*;
 use ethereum_forkid::{ForkFilter, ForkId};
 use fastrlp::*;
-use std::{collections::BTreeSet, convert::TryFrom};
+use std::{collections::BTreeSet, convert::TryFrom, str::FromStr};
 
 pub fn capability_name() -> CapabilityName {
     CapabilityName(ArrayString::from("eth").unwrap())
